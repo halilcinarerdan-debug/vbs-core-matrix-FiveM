@@ -38,11 +38,13 @@ end
 -- ★ [YENİ] PARA KONVOYU: ProcessHubDemandCycle satış anında nakti hemen
 -- Matrix.CashDecay.Deposit'e yatırmak yerine, MoneyConvoyEtaMs kadar
 -- "yolda" tutar. SetTimeout callback'i ödeme anında Matrix.Bureau
--- .IsLockedDown'ı YENİDEN (canlı) kontrol eder -- böylece hem hub-kilidi
--- event'i (matrix:internal:bureauLockdown) hem de doğrudan
--- Matrix.Bureau.IssueRaid çağrısı (ki IssueRaid state.lockdown_active'i
--- kendisi DEĞİL, Büro'nun kanıt/lockdown motoru [bkz. bureau.lua ~1137-
--- 1220] belirler) aynı şekilde yakalanır -- ayrı bir kanca gerekmez.
+-- .IsLockedDown'ı YENİDEN (canlı) kontrol eder -- böylece kanıt/lockdown
+-- motorunun (bureau.lua ~1137-1220) tetiklediği herhangi bir kilit de
+-- yakalanır. AYRICA aşağıdaki 'matrix:internal:raidIssued' dinleyicisi,
+-- fiziki bir baskının (Matrix.Bureau.IssueRaid) -- kanıt eşiği aşılmış
+-- olsun ya da olmasın -- o trap house'a ait TÜM yoldaki konvoyları ANINDA
+-- müsadere etmesini sağlar (VBS4/CMO askeri model: baskın = tedarik
+-- zincirinde koşulsuz kesinti).
 local PendingConvoys  = {}
 local nextConvoyId    = 0
 
@@ -71,6 +73,43 @@ local function DispatchMoneyConvoy(hubId, hub, proceeds)
         Matrix.Log('DISTRICT_HUB', 'Hub #%d (trap #%d) para konvoyu ulasti: ciro=%.1f (kirli nakite eklendi).',
             convoy.hub_id, convoy.trap_house_id, convoy.amount)
     end)
+end
+
+-- ★ [YENİ] TAKTIKSEL KESINTI: Matrix.Bureau.IssueRaid, Büro'nun kanıt/
+-- lockdown motorunu (LockdownEvidenceThreshold) BEKLEMEDEN, o trap house'a
+-- ait TÜM yoldaki para konvoylarını ANINDA ve KOŞULSUZ olarak müsadere
+-- eder -- fiziki bir baskın lojistik tedarik zincirini tamamen keser.
+-- SetTimeout callback'indeki IsLockedDown kontrolü (yukarıda) hâlâ ayrı
+-- bir savunma katmanı olarak kalır (kanıt motoru sonradan kilit
+-- uygularsa da yakalanır), ama artık IssueRaid için ZORUNLU DEĞİLDİR.
+AddEventHandler('matrix:internal:raidIssued', function(trapHouseId)
+    if type(trapHouseId) ~= 'number' then return end
+
+    for convoyId, convoy in pairs(PendingConvoys) do
+        if convoy.trap_house_id == trapHouseId then
+            PendingConvoys[convoyId] = nil
+            Matrix.Log('DISTRICT_HUB',
+                '[SIGINT INTERCEPT] $%d cash confiscated in transit by federal agents.',
+                math.floor(convoy.amount + 0.5))
+        end
+    end
+end)
+
+-- ★ [TANI-AMAÇLI] server/matrix_diagnostics.lua'nın raidIssued->konvoy
+-- müsadere kancasını PendingConvoys'a doğrudan erişmeden davranışsal
+-- olarak doğrulayabilmesi için minimal test erişimcileri (üretim akışında
+-- KULLANILMAZ).
+function Matrix.DistrictHubs.__DiagInjectTestConvoy(trapHouseId, amount)
+    nextConvoyId = nextConvoyId + 1
+    PendingConvoys[nextConvoyId] = { trap_house_id = trapHouseId, amount = amount, hub_id = -1 }
+    return nextConvoyId
+end
+
+function Matrix.DistrictHubs.__DiagHasPendingConvoyForTrap(trapHouseId)
+    for _, convoy in pairs(PendingConvoys) do
+        if convoy.trap_house_id == trapHouseId then return true end
+    end
+    return false
 end
 
 local function Reply(src, msg)

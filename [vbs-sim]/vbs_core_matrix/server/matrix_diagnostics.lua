@@ -399,6 +399,39 @@ AddCheck('Wounds.ApplyBotRegionalDamage: sahte/agsiz(non-networked) ped guard cr
     return true, 'sahte/ag-disi net_id ile cagri crash OLMADAN guvenli sekilde reddedildi'
 end)
 
+AddCheck('DistrictHubs: IssueRaid, LockdownEvidenceThreshold BEKLEMEDEN yoldaki para konvoyunu ANINDA musadere eder', function()
+    if not (Matrix.DistrictHubs
+        and Matrix.DistrictHubs.__DiagInjectTestConvoy
+        and Matrix.DistrictHubs.__DiagHasPendingConvoyForTrap) then
+        return false, 'Matrix.DistrictHubs.__DiagInjectTestConvoy/__DiagHasPendingConvoyForTrap tanimli degil'
+    end
+
+    -- ★ NOT: gercek Matrix.Bureau.IssueRaid'i BURADA CAGIRMIYORUZ -- o,
+    -- MySQL.insert (matrix_raid_log) ve TUM oyunculara TriggerClientEvent
+    -- ile CANLI bir 'baskin' yayinlar (gercek yan etkiler). Bu regresyon
+    -- SADECE bizim ekledigimiz 'matrix:internal:raidIssued' kancasinin
+    -- davranisini dogrular -- IssueRaid zaten bu event'i (trapHouseId ile)
+    -- kosulsuz olarak ateşler (bkz. server/bureau.lua ~446).
+    local fakeTrapId = -999002
+
+    Matrix.DistrictHubs.__DiagInjectTestConvoy(fakeTrapId, 999.0)
+    local hadConvoyBeforeRaid = Matrix.DistrictHubs.__DiagHasPendingConvoyForTrap(fakeTrapId)
+
+    local ok, err = pcall(TriggerEvent, 'matrix:internal:raidIssued', fakeTrapId)
+    local hasConvoyAfterRaid = Matrix.DistrictHubs.__DiagHasPendingConvoyForTrap(fakeTrapId)
+
+    if not ok then
+        return false, ('raidIssued kancasi beklenmedik bir hata firlatti: %s'):format(tostring(err))
+    end
+    if not hadConvoyBeforeRaid then
+        return false, 'test konvoyu enjekte edilemedi (on-kosul basarisiz)'
+    end
+    if hasConvoyAfterRaid then
+        return false, 'raidIssued sonrasi konvoy HALA bekliyor -- ANINDA musadere edilmedi'
+    end
+    return true, 'raidIssued kancasi, kanit esigi asilmadan konvoyu aninda musadere etti'
+end)
+
 AddCheck('Kitchen.Packaging urun tanimlari gecerli', function()
     local pk = Config.Kitchen.Packaging
     if not pk or type(pk.RawItem) ~= 'string' or pk.RawItem == '' then return false, 'RawItem bos' end
