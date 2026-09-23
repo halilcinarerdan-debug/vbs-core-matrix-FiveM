@@ -28,6 +28,51 @@ local pairs, ipairs, tonumber, type = pairs, ipairs, tonumber, type
 local Hubs      = {}   -- [id] = { id, trap_house_id, label, coords, active, locked }
 local dirtyHubs = {}
 
+-- ★ [YENİ] server/debug_map.lua canlı harita erişimcisi -- Hubs lokal
+-- tablosuna başka dosyalardan doğrudan erişilmez, sadece bu salt-okunur
+-- erişimci üzerinden.
+function Matrix.DistrictHubs.GetAll()
+    return Hubs
+end
+
+-- ★ [YENİ] PARA KONVOYU: ProcessHubDemandCycle satış anında nakti hemen
+-- Matrix.CashDecay.Deposit'e yatırmak yerine, MoneyConvoyEtaMs kadar
+-- "yolda" tutar. SetTimeout callback'i ödeme anında Matrix.Bureau
+-- .IsLockedDown'ı YENİDEN (canlı) kontrol eder -- böylece hem hub-kilidi
+-- event'i (matrix:internal:bureauLockdown) hem de doğrudan
+-- Matrix.Bureau.IssueRaid çağrısı (ki IssueRaid state.lockdown_active'i
+-- kendisi DEĞİL, Büro'nun kanıt/lockdown motoru [bkz. bureau.lua ~1137-
+-- 1220] belirler) aynı şekilde yakalanır -- ayrı bir kanca gerekmez.
+local PendingConvoys  = {}
+local nextConvoyId    = 0
+
+local function DispatchMoneyConvoy(hubId, hub, proceeds)
+    nextConvoyId = nextConvoyId + 1
+    local convoyId = nextConvoyId
+
+    PendingConvoys[convoyId] = {
+        trap_house_id = hub.trap_house_id,
+        amount        = proceeds,
+        hub_id        = hubId
+    }
+
+    SetTimeout(Config.DistrictHubs.MoneyConvoyEtaMs or 60000, function()
+        local convoy = PendingConvoys[convoyId]
+        if not convoy then return end
+        PendingConvoys[convoyId] = nil
+
+        if Matrix.Bureau and Matrix.Bureau.IsLockedDown and Matrix.Bureau.IsLockedDown(convoy.trap_house_id) then
+            Matrix.Log('DISTRICT_HUB', '[SIGINT INTERCEPT] $%d cash confiscated in transit by federal agents.',
+                math.floor(convoy.amount + 0.5))
+            return
+        end
+
+        Matrix.CashDecay.Deposit(convoy.trap_house_id, convoy.amount)
+        Matrix.Log('DISTRICT_HUB', 'Hub #%d (trap #%d) para konvoyu ulasti: ciro=%.1f (kirli nakite eklendi).',
+            convoy.hub_id, convoy.trap_house_id, convoy.amount)
+    end)
+end
+
 local function Reply(src, msg)
     if type(src) == 'number' and src > 0 then
         TriggerClientEvent('chat:addMessage', src, { args = { '[HUB]', msg } })
@@ -341,9 +386,9 @@ local function ProcessHubDemandCycle(hubId, hub)
             end)
             if removeOk and removed == true then
                 local proceeds = batchGrams * (Config.Market.StreetBasePricePerGram or 20.0)
-                Matrix.CashDecay.Deposit(hub.trap_house_id, proceeds)
-                Matrix.Log('DISTRICT_HUB', 'Hub #%d (trap #%d, %s) toplu satis: %s x%d, ciro=%.1f (kirli nakite eklendi).',
-                    hubId, hub.trap_house_id, hub.label, item.name, batchGrams, proceeds)
+                DispatchMoneyConvoy(hubId, hub, proceeds)
+                Matrix.Log('DISTRICT_HUB', 'Hub #%d (trap #%d, %s) toplu satis: %s x%d, ciro=%.1f (para konvoyu yolda, ETA=%dms).',
+                    hubId, hub.trap_house_id, hub.label, item.name, batchGrams, proceeds, Config.DistrictHubs.MoneyConvoyEtaMs or 60000)
             end
             break
         end

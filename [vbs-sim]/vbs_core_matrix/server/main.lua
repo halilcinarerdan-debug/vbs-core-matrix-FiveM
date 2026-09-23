@@ -1383,6 +1383,11 @@ function Matrix.TickPhysicalDispatches()
                     local zone = FindDeadZone(coords)
                     if zone and not dispatch.comms_lost then
                         dispatch.comms_lost = true
+                        -- ★ [YENİ] server/debug_map.lua için son bilinen konum
+                        -- (LKP) -- sinyal kesildiği andaki canlı koordinat
+                        -- burada donuyor; sinyal geri gelene kadar admin
+                        -- haritasında bu nokta sabit kalır.
+                        dispatch.last_known_coords = coords
                         Matrix.Log('CORE', '[BAĞLANTI KESİLDİ] Bot #%d (%s) kör bölgede: %s',
                             botId, bot.name, zone.label)
                         if type(dispatch.dispatcher_src) == 'number' and dispatch.dispatcher_src > 0 then
@@ -1629,6 +1634,14 @@ CreateThread(function()
         if Matrix.Hud and Matrix.Hud.PushSnapshots then
             local ok5, err5 = pcall(Matrix.Hud.PushSnapshots)
             if not ok5 then Matrix.Log('CORE', '[HATA] Hud.PushSnapshots basarisiz (yutuldu): %s', tostring(err5)) end
+        end
+
+        -- ★ [YENİ] server/debug_map.lua admin canlı harita yayını -- yeni
+        -- bir thread AÇILMAZ, bu MEVCUT 1sn'lik tick'e iğnelenir. Abone
+        -- yoksa Matrix.DebugMap.Tick() içinde SIFIR maliyetle döner.
+        if Matrix.DebugMap and Matrix.DebugMap.Tick then
+            local ok6, err6 = pcall(Matrix.DebugMap.Tick)
+            if not ok6 then Matrix.Log('CORE', '[HATA] DebugMap.Tick basarisiz (yutuldu): %s', tostring(err6)) end
         end
     end
 end)

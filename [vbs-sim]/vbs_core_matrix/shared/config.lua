@@ -851,7 +851,12 @@ Config.Bureau.LivestreamRadioLeakPerTick =
 Config.DistrictHubs = {
     MaxPerTrapHouse       = 3,
     SaleBatchGrams        = 10,
-    DemandCycleSeconds    = 45
+    DemandCycleSeconds    = 45,
+    -- ★ [YENİ] PARA KONVOYU: satış anında değil, bu kadar ms sonra
+    -- (nakit "yolda"ymış gibi) Matrix.CashDecay.Deposit çağrılır. Bu
+    -- pencere içinde trap house Büro tarafından kilitlenirse (raid),
+    -- konvoy federal ajanlarca durdurulur ve nakit ASLA yatırılmaz.
+    MoneyConvoyEtaMs      = 60000
 }
 
 -- [T4-3] GELECEKTEKİ OPENAI / CHATGPT ANALİZ KÖPRÜSÜ — server/bureau.lua

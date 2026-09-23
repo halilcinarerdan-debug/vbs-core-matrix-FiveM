@@ -14,6 +14,7 @@ shared_scripts {
 
 client_scripts {
     'client/hud.lua',
+    'client/debug_map.lua',
     'client/trap_house_client.lua',
     'client/composer_intro.lua',
     'client/mercenary_followers.lua',
@@ -29,6 +30,7 @@ server_scripts {
     'server/recruitment.lua',
     'server/bureau.lua',
     'server/district_hubs.lua',
+    'server/debug_map.lua',
     'server/kitchen.lua',
     'server/logistics.lua',
     'server/market.lua',
