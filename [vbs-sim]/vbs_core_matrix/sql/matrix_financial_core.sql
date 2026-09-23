@@ -1449,4 +1449,35 @@ CREATE TABLE IF NOT EXISTS `matrix_opsec_tamper_log` (
         FOREIGN KEY (`trap_house_id`) REFERENCES `matrix_trap_houses` (`id`)
 ) ENGINE = InnoDB DEFAULT CHARSET = utf8mb4;
 
+-- =====================================================================
+-- MATRIX TELEMETRI + PIYASA ARZ/TALEP SEMASI (EKLEMELİ / additive-only)
+--
+-- `matrix_raid_log` bu dosyada ZATEN MEVCUT (yukarida) -- server/market.lua'nin
+-- arz/talep motoru (recent_raid_factor) o MEVCUT tabloyu okur, burada
+-- YENIDEN OLUSTURULMUYOR.
+--
+--   1) matrix_player_telemetry      -- server/player_telemetry.lua write-behind hedefi
+--   2) matrix_market_demand_supply  -- server/market.lua Matrix.Market.RecomputeDemandSupply hedefi
+-- =====================================================================
+
+CREATE TABLE IF NOT EXISTS `matrix_player_telemetry` (
+    `citizenid`        VARCHAR(50) NOT NULL PRIMARY KEY,
+    `active_hours`     TEXT        NULL,
+    `preferred_zone`   INT         NULL,
+    `aggression_index` FLOAT       NOT NULL DEFAULT 0.0,
+    `escape_pattern`   FLOAT       NOT NULL DEFAULT 0.5,
+    `spend_rate`       FLOAT       NOT NULL DEFAULT 0.0,
+    `death_frequency`  FLOAT       NOT NULL DEFAULT 0.0,
+    `trade_balance`    FLOAT       NOT NULL DEFAULT 0.0,
+    `updated_at`       DATETIME    NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
+) ENGINE = InnoDB DEFAULT CHARSET = utf8mb4;
+
+CREATE TABLE IF NOT EXISTS `matrix_market_demand_supply` (
+    `zone_id`            INT          NOT NULL PRIMARY KEY,
+    `demand_current`     FLOAT        NOT NULL DEFAULT 1.0,
+    `supply_current`     FLOAT        NOT NULL DEFAULT 1.0,
+    `last_recompute_at`  DATETIME     NULL,
+    `trend_7d`           VARCHAR(16)  NOT NULL DEFAULT 'stable'
+) ENGINE = InnoDB DEFAULT CHARSET = utf8mb4;
+
 SET FOREIGN_KEY_CHECKS = 1;
