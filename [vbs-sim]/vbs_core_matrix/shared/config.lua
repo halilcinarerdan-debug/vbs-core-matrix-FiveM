@@ -1231,7 +1231,24 @@ Config.BotWounds = {
     -- Karaborsa Ameliyatı (Trap House tedavisi): bu süre boyunca bot
     -- dispatch kabul edemez, sonunda (yalnızca KALICI OLMAYAN) uzuv
     -- hasarları sıfırlanır.
-    TrapHouseTreatmentHours    = 12
+    TrapHouseTreatmentHours    = 12,
+
+    -- ★ [YENİ] ZERO-TRUST HASAR RAPORU: matrix:server:reportPlayerWounded
+    -- sunucu-taraflı mesafe kontrolünde (bkz. server/wound_system.lua
+    -- Matrix.Wounds.ValidateWoundReport) bu mesafenin (metre) ÜZERİNDEKİ
+    -- iddialar YALNIZCA burada listelenen uzun-menzil silah sınıflarıyla
+    -- kabul edilir; aksi halde sahte/spoofed rapor olarak reddedilir.
+    -- Bu mod (fictional/in-game economy sim) hiçbir sniper silahı
+    -- tanımlamıyordu -- liste bu YAMA ile İLK KEZ eklendi.
+    SpoofDamageDistanceThreshold = 250.0,
+    LongRangeWeaponNames = {
+        'WEAPON_SNIPERRIFLE',
+        'WEAPON_HEAVYSNIPER',
+        'WEAPON_HEAVYSNIPER_MK2',
+        'WEAPON_MARKSMANRIFLE',
+        'WEAPON_MARKSMANRIFLE_MK2',
+        'WEAPON_PRECISIONRIFLE'
+    }
 }
 
 Config.PermanentCrippling = {

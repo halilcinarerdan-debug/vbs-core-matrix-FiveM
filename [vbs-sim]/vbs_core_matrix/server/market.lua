@@ -255,6 +255,239 @@ function Matrix.Market.FindNearestZone(coords)
 end
 
 
+-- =====================================================================
+-- ★ [YENİ] ÇOK-DEĞİŞKENLİ DETERMİNİSTİK ARZ/TALEP FİYATLANDIRMA MOTORU
+--
+-- Matrix.Market.EvaluateSale'in İMZASI DEĞİŞTİRİLMEDİ -- bu, o
+-- fonksiyonun kullandığı `zone.price_multiplier` (ret-cezası/decay
+-- mekaniği) alanına PARALEL, AYRI bir "demand/supply" modelidir; sonucu
+-- yeni matrix_market_demand_supply tablosuna yazılır ve /piyasasorgu
+-- üzerinden okunur.
+--
+--   demand = time_factor * weather_factor * zone_heat * active_players_factor * recent_raid_factor
+--   supply = stock_level * production_rate * last_24h_loss_ratio
+--   price_multiplier = clamp(demand / max(supply, 0.01), Floor, Ceiling)
+--
+-- UYARLAMALAR (kodda gerçekte var olan sembollere göre; bkz. final özet):
+--   • weather_factor: bu kaynak (vbs_core_matrix) hiçbir yerde hava
+--     durumu senkronizasyonu TUTMUYOR (GetWeatherTypeTransition vb.
+--     hiçbir dosyada yok) -- bu yüzden burada MİNİMAL, deterministik bir
+--     hava-durumu değişkeni (Matrix.Market.WeatherState) eklendi; harici
+--     bir hava-senkron scripti ileride Matrix.Market.SetWeatherState(w)
+--     export'unu çağırarak bunu güncelleyebilir. Varsayılan 'CLEAR'.
+--   • zone_heat: Matrix.Bureau.GetHeat TEK bir trap_house_id alır (zone
+--     değil) -- bu yüzden bir zone'a bağlı TÜM trap house'ların ısısının
+--     MAKSİMUMU alınıp Config.Bureau.CyberLeakMaxIntensity'e normalize
+--     edilir (server/underworld_network.lua'daki AYNI heat/MaxIntensity
+--     oranı deseniyle tutarlı). Sıfıra bölünmeyi/talebi TAMAMEN
+--     sıfırlamayı önlemek için 0.05 taban değeri uygulanır.
+--   • stock_level / production_rate: bu kaynakta gerçek zamanlı
+--     stok/üretim-hızı takibi YOK (kitchen.lua/workbench.lua stok
+--     sayacı tutmuyor) -- iki değişken de nötr taban (1.0) olarak
+--     alınır; ileride gerçek envanter/üretim sayaçlarına bağlanabilir.
+--   • last_24h_loss_ratio: matrix_raid_log (server/bureau.lua'da zaten
+--     mevcut şema, bkz. sql/matrix_financial_core.sql) üzerinden o
+--     zone'a bağlı trap house'larda SON 24 SAATTEKİ baskın sayısına göre
+--     azaltılır.
+-- =====================================================================
+
+Matrix.Market.WeatherState = Matrix.Market.WeatherState or 'CLEAR'
+
+local WeatherFactorTable = {
+    CLEAR    = 1.00,
+    CLOUDY   = 1.02,
+    OVERCAST = 1.05,
+    RAIN     = 1.10,
+    THUNDER  = 1.15,
+    FOGGY    = 0.95,
+    SNOW     = 1.20,
+    BLIZZARD = 1.20,
+    XMAS     = 1.10
+}
+
+--- Harici bir hava-senkron modülü (bu kaynakta şu an YOK) ileride bunu
+--- çağırarak talep modelini gerçek dünya/GTA hava durumuna bağlayabilir.
+function Matrix.Market.SetWeatherState(weatherName)
+    if type(weatherName) == 'string' and weatherName ~= '' then
+        Matrix.Market.WeatherState = weatherName:upper()
+    end
+end
+
+local function ComputeTimeFactor()
+    local okHours, hours = pcall(GetClockHours)
+    hours = (okHours and tonumber(hours)) or 12
+    hours = hours % 24
+    -- Gece yarısına (0/24) en yakın saat -> 1.2 (zirve talep), öğlene
+    -- (12) en yakın saat -> 0.8 (dip talep); ikisi arasında DOĞRUSAL.
+    local distFromMidnight = math_min(hours, 24 - hours) -- [0, 12]
+    return 1.2 - ((distFromMidnight / 12.0) * 0.4)
+end
+
+local function ComputeWeatherFactor()
+    return WeatherFactorTable[Matrix.Market.WeatherState] or 1.0
+end
+
+--- Bir zone'a bağlı (Inspector.GetZoneForTrapHouse ile en-yakın-zone
+--- eşlemesi) TÜM trap house'ların ısısının MAKSİMUMUNU, MaxIntensity'e
+--- normalize edip döner. Isı hiç üretilmemişse taban 0.05 uygulanır ki
+--- talep formülü kalıcı olarak sıfıra kilitlenmesin.
+local function ComputeZoneHeatFactor(zoneId)
+    local maxHeatRatio = 0.0
+    local cyberMax = (Config.Bureau and Config.Bureau.CyberLeakMaxIntensity) or 5.0
+    if Matrix.TrapHouses and Matrix.Bureau and Matrix.Bureau.GetHeat and Matrix.Inspector and Matrix.Inspector.GetZoneForTrapHouse then
+        for trapHouseId in pairs(Matrix.TrapHouses) do
+            local okZone, trapZone = pcall(Matrix.Inspector.GetZoneForTrapHouse, trapHouseId)
+            if okZone and trapZone == zoneId then
+                local heat = Matrix.Bureau.GetHeat(trapHouseId) or 0.0
+                local ratio = Matrix.Clamp((tonumber(heat) or 0.0) / cyberMax, 0.0, 1.0)
+                if ratio > maxHeatRatio then maxHeatRatio = ratio end
+            end
+        end
+    end
+    return math_max(maxHeatRatio, 0.05)
+end
+
+--- Zone koordinatlarının yarıçapı içindeki ONLINE oyuncu sayısını sayar
+--- (server/district_hubs.lua ProcessSplinterCellCycle'daki AYNI
+--- GetPlayers()/GetPlayerPed() taraması deseniyle tutarlı).
+local function ComputeActivePlayersFactor(zoneCfg)
+    local count = 0
+    local players = GetPlayers and GetPlayers() or {}
+    for _, playerIdStr in ipairs(players) do
+        local targetSrc = tonumber(playerIdStr)
+        if targetSrc then
+            local ped = GetPlayerPed(targetSrc)
+            if ped and ped ~= 0 then
+                local okCoords, coords = pcall(GetEntityCoords, ped)
+                if okCoords and coords and #(coords - zoneCfg.coords) <= (zoneCfg.radius or 400.0) then
+                    count = count + 1
+                end
+            end
+        end
+    end
+    return 1.0 + (math_min(count, 10) / 10.0) * 0.5 -- [1.0, 1.5]
+end
+
+--- Son 24 saatte, bu zone'a bağlı trap house'larda kaç baskın (raid) SQL
+--- kaydı var (matrix_raid_log.created_at, mevcut şema -- bkz. özet).
+local function CountRecentRaidsForZone(zoneId)
+    local okRows, rows = pcall(function()
+        return MySQL.query.await(
+            'SELECT trap_house_id, COUNT(*) AS n FROM matrix_raid_log WHERE created_at > (NOW() - INTERVAL 24 HOUR) GROUP BY trap_house_id',
+            {})
+    end)
+    if not okRows or type(rows) ~= 'table' then return 0 end
+
+    local total = 0
+    if Matrix.Inspector and Matrix.Inspector.GetZoneForTrapHouse then
+        for _, row in ipairs(rows) do
+            local okZone, trapZone = pcall(Matrix.Inspector.GetZoneForTrapHouse, row.trap_house_id)
+            if okZone and trapZone == zoneId then
+                total = total + (tonumber(row.n) or 0)
+            end
+        end
+    end
+    return total
+end
+
+local function ComputeRecentRaidFactor(raidCount)
+    return 1.0 + (math_min(raidCount, 5) / 5.0) * 0.5 -- [1.0, 1.5]
+end
+
+--- supply = stock_level * production_rate * last_24h_loss_ratio.
+--- stock_level/production_rate: bu kaynakta canlı takip YOK -> nötr
+--- taban (1.0). last_24h_loss_ratio: baskın sayısı arttıkça arz düşer.
+local function ComputeSupplyComponents(raidCount)
+    local stockLevel     = 1.0
+    local productionRate = 1.0
+    local lossRatio       = Matrix.Clamp(1.0 - (math_min(raidCount, 5) / 10.0), 0.5, 1.0)
+    return stockLevel, productionRate, lossRatio
+end
+
+local MarketDemandSupply      = {} -- [zoneId] = { demand, supply, price_multiplier }
+local dirtyDemandSupply       = {}
+
+--- Tüm Config.Market.Zones için demand/supply/price_multiplier'ı yeniden
+--- hesaplar. EvaluateSale'in kendi price_multiplier'ına DOKUNMAZ --
+--- tamamen ayrı, RAM+DB'de tutulan bir modeldir.
+function Matrix.Market.RecomputeDemandSupply()
+    local timeFactor    = ComputeTimeFactor()
+    local weatherFactor = ComputeWeatherFactor()
+
+    for _, zoneCfg in ipairs(Config.Market.Zones) do
+        local zoneId    = zoneCfg.id
+        local zoneHeat  = ComputeZoneHeatFactor(zoneId)
+        local playersF  = ComputeActivePlayersFactor(zoneCfg)
+        local raidCount = CountRecentRaidsForZone(zoneId)
+        local raidF     = ComputeRecentRaidFactor(raidCount)
+
+        local demand = timeFactor * weatherFactor * zoneHeat * playersF * raidF
+
+        local stockLevel, productionRate, lossRatio = ComputeSupplyComponents(raidCount)
+        local supply = stockLevel * productionRate * lossRatio
+
+        local priceMultiplier = Matrix.Clamp(
+            demand / math_max(supply, 0.01),
+            Config.Market.PriceMultiplierFloor,
+            Config.Market.PriceMultiplierCeiling
+        )
+
+        MarketDemandSupply[zoneId] = {
+            zone_id           = zoneId,
+            demand_current    = demand,
+            supply_current    = supply,
+            price_multiplier  = priceMultiplier,
+            last_recompute_at = Matrix.Now()
+        }
+        dirtyDemandSupply[zoneId] = true
+    end
+end
+
+function Matrix.Market.GetDemandSupply(zoneId)
+    return MarketDemandSupply[tonumber(zoneId)]
+end
+
+local function FlushDirtyDemandSupply()
+    local pendingZones = {}
+    for zoneId in pairs(dirtyDemandSupply) do
+        pendingZones[#pendingZones + 1] = zoneId
+    end
+    if #pendingZones == 0 then return end
+
+    local queries = {}
+    for _, zoneId in ipairs(pendingZones) do
+        local rec = MarketDemandSupply[zoneId]
+        if rec then
+            queries[#queries + 1] = {
+                query = [[
+                    INSERT INTO matrix_market_demand_supply (zone_id, demand_current, supply_current, last_recompute_at)
+                    VALUES (?, ?, ?, NOW())
+                    ON DUPLICATE KEY UPDATE
+                        demand_current    = VALUES(demand_current),
+                        supply_current    = VALUES(supply_current),
+                        last_recompute_at = VALUES(last_recompute_at)
+                ]],
+                values = { zoneId, rec.demand_current, rec.supply_current }
+            }
+        end
+    end
+
+    if #queries == 0 then
+        for _, zoneId in ipairs(pendingZones) do dirtyDemandSupply[zoneId] = nil end
+        return
+    end
+
+    local ok, result = pcall(function() return MySQL.transaction.await(queries) end)
+    if ok and result ~= false then
+        for _, zoneId in ipairs(pendingZones) do dirtyDemandSupply[zoneId] = nil end
+    else
+        Matrix.Log('MARKET',
+            '[HATA][KRITIK] FlushDirtyDemandSupply transaction basarisiz -- dirty bayraklar KORUNDU: %s',
+            tostring(result))
+    end
+end
+
+
 -- ★ KATMAN 5 ULTIMATE [U6]: `saleGrams` opsiyonel 5. parametredir (geriye
 -- dönük uyumlu — eski çağıranlar bu argümanı hiç geçmez, nil kalır ve
 -- ledger'a hiçbir şey yazılmaz, davranış BİREBİR ESKİSİYLE AYNIDIR).
@@ -413,6 +646,18 @@ RegisterCommand('piyasasorgu', function(src, args)
         if not zone then Reply(src, 'Bu bolge icin kayit yok.'); return end
         Reply(src, ('Bolge #%d | Fiyat-Carpani:x%.3f | Ardarda-Red:%d'):format(
             zoneId, zone.price_multiplier, zone.rejected_streak))
+
+        -- ★ [YENİ] Arz/talep modeli -- SADECE tam sayı/yüzde olarak
+        -- (Sıfır Çiğ Sayı Standardı, bkz. bu dosyanın üst yorumu [M2]).
+        local ds = Matrix.Market.GetDemandSupply(zoneId)
+        if ds then
+            Reply(src, ('Talep:%%%d | Arz:%%%d | Fiyat-Carpani(Model):%%%d'):format(
+                math_floor((ds.demand_current * 100) + 0.5),
+                math_floor((ds.supply_current * 100) + 0.5),
+                math_floor((ds.price_multiplier * 100) + 0.5)))
+        else
+            Reply(src, 'Arz/talep modeli henuz hesaplanmadi (ilk CashDecay tick bekleniyor).')
+        end
         return
     end
 
@@ -633,6 +878,16 @@ end
 
 
 function Matrix.CashDecay.Tick()
+    -- ★ [YENİ] Çok-değişkenli arz/talep fiyatlandırma modeli, bu kaynakta
+    -- literal olarak "5 dakikalık" bir ticker BULUNMADIĞI için (en yakın
+    -- mevcut periyodik döngü Config.CashDecay.TickIntervalMs=60000, yani
+    -- 60sn) YENİ bir thread AÇMAK yerine bu MEVCUT tickerA bağlandı --
+    -- bkz. final özet notu.
+    local okDemand, demandErr = pcall(Matrix.Market.RecomputeDemandSupply)
+    if not okDemand then
+        Matrix.Log('MARKET', '[HATA] RecomputeDemandSupply hata verdi (yutuldu): %s', tostring(demandErr))
+    end
+
     local now = Matrix.Now()
     for trapHouseId, rec in pairs(CashByTrapHouse) do
         if rec.dirty_amount > 0.0 and Matrix.TrapHouses and Matrix.TrapHouses[trapHouseId] then
@@ -2002,6 +2257,7 @@ CreateThread(function()
         FlushDirtyMarketZones()
         FlushDirtyCash()
         FlushDirtyZoneLedger()
+        FlushDirtyDemandSupply()
     end
 end)
 
@@ -2017,6 +2273,8 @@ exports('SetRank',              function(cid, rank, by) return Matrix.Hierarchy.
 exports('EvaluateSale',         function(zoneId, cid, cog, purity, ballisticId, saleGrams)
     return Matrix.Market.EvaluateSale(zoneId, cid, cog, purity, ballisticId, saleGrams)
 end)
+exports('SetWeatherState',      function(weatherName) return Matrix.Market.SetWeatherState(weatherName) end)
+exports('GetDemandSupply',      function(zoneId) return Matrix.Market.GetDemandSupply(zoneId) end)
 exports('FindNearestMarketZone',function(coords) return Matrix.Market.FindNearestZone(coords) end)
 
 

@@ -1937,21 +1937,13 @@ exports('RunHourlyFinancialAudit', function() return Matrix.Bureau.RunHourlyFina
 Matrix.Bureau.CryptoWallets = Matrix.Bureau.CryptoWallets or {}
 Matrix.Bureau.__CryptoLocks = Matrix.Bureau.__CryptoLocks or {}
 
+-- ★ [KRIPTO-1] Artik gercek SHA-256 (shared/crypto.lua, FIPS 180-4, saf
+-- Lua 5.4 native bitwise operatorleri) uzerinden delege edilir. Onceki
+-- "benzeri" checksum-zinciri motoru KALDIRILDI; imza (64 hex karakter)
+-- ve cagiran kod (GenerateWalletAddress vb. :sub(1, N) ile kisaltir)
+-- DEGISMEDI, bu yuzden asagi akis TAMAMEN geriye-donuk uyumludur.
 local function _CryptoSha256Like(input)
-    input = tostring(input or '')
-    local out = {}
-    for i = 1, 16 do
-        local acc = 0
-        local raw = ('%s#%d'):format(input, i)
-        for round = 1, 512 do
-            for j = 1, #raw do
-                acc = (acc + (raw:byte(j) * (j + 97 + i + round))) % 0xFFFFFFF
-                acc = ((acc * 31) + round) % 0xFFFFFFF
-            end
-        end
-        out[i] = ('%04X'):format(acc % 0x10000)
-    end
-    return table.concat(out, '')
+    return sha256.hex(tostring(input or ''))
 end
 
 function Matrix.Bureau.GenerateWalletAddress(holderIdentifier, holderType)

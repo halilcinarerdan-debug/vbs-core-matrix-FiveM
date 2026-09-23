@@ -319,6 +319,14 @@ function Matrix.RemoveBot(id, reason)
     local bot = Matrix.Bots[id]
     if not bot then return false end
 
+    -- ★ [YENİ] SNAPSHOT-BEFORE-DELETE: bot RAM matrisinden (Matrix.Bots[id]
+    -- = nil) silinmeden ÖNCE tam bir deep-copy alınır. Böylece bu bot'un
+    -- kaldırılmasını dinleyen HERHANGİ bir handler (şu an
+    -- matrix:internal:gangLeaderDeceased, yarın eklenecek başka biri)
+    -- artık-nil olan Matrix.Bots[id]'i DEREFERENCE ETMEK ZORUNDA KALMAZ --
+    -- kendisine hazır bir kopya iletilir/döndürülür.
+    local snapshot = Matrix.GetBotDeepCopy(id)
+
     if Matrix.Dispatches[id] then
         Matrix.DespawnDispatchEntity(id, Matrix.Dispatches[id])
         Matrix.Dispatches[id] = nil
@@ -332,7 +340,7 @@ function Matrix.RemoveBot(id, reason)
     if reason == 'deceased' and bot.role == 'Leader' and bot.state and bot.state.trap_house_id then
         local deadLeaderTrapHouseId = bot.state.trap_house_id
         local fragOk, fragErr = pcall(function()
-            TriggerEvent('matrix:internal:gangLeaderDeceased', deadLeaderTrapHouseId, id)
+            TriggerEvent('matrix:internal:gangLeaderDeceased', deadLeaderTrapHouseId, id, snapshot)
         end)
         if not fragOk then
             Matrix.Log('CORE', '[HATA] gangLeaderDeceased yayini basarisiz (yutuldu): %s', tostring(fragErr))
@@ -352,7 +360,7 @@ function Matrix.RemoveBot(id, reason)
     P.dirtyBots[id] = nil
     Matrix.Bots[id] = nil
     Matrix.Log('CORE', 'Bot #%d aktif matristen kaldirildi: %s', id, bot.status)
-    return true
+    return true, snapshot
 end
 
 -- =====================================================================
@@ -572,6 +580,11 @@ local DISPATCH_BUSTED_PROXIMITY_M     = 8.0
 local DISPATCH_BUSTED_DWELL_TICKS     = 8
 local DISPATCH_ALPR_RADIUS_M          = 250.0
 local DISPATCH_TASK_REISSUE_TICKS     = 25
+
+-- ★ [YENİ] server/player_telemetry.lua: 'aggressive' profilli bir oyuncu
+-- sevk halindeki bota bu yarıçap içinde yaklaştığında bot pedine daha
+-- temkinli/geri-çekilen bir SetPedCombatAttributes seti uygulanır.
+local AGGRESSIVE_PLAYER_DETECT_RADIUS_M = 40.0
 
 local NAVMESH_TASK_TIMEOUT            = -1
 local NAVMESH_STOPPING_RANGE_M        = 0.0
@@ -1323,6 +1336,39 @@ function Matrix.TickPhysicalDispatches()
                     local portOk, portErr = pcall(Matrix.Logistics.CheckPortArrival, dispatch, coords)
                     if not portOk then
                         Matrix.Log('CORE', '[HATA] CheckPortArrival basarisiz (yutuldu): %s', tostring(portErr))
+                    end
+                end
+
+                -- ★ [YENİ] server/player_telemetry.lua profil kancası: bu
+                -- yakınlıktaki online oyunculardan biri 'aggressive'
+                -- olarak profillenmişse (deterministik EMA eşiği, RNG
+                -- yok) bota bir kez temkinli/geri-çekilen combat attribute
+                -- seti uygulanır. Idempotent -- her tur tekrar
+                -- ayarlamamak için dispatch.__cautious_mode_applied
+                -- bayrağı kullanılır.
+                if not dispatch.__cautious_mode_applied and Matrix.PlayerTelemetry and Matrix.PlayerTelemetry.GetProfileForSource then
+                    local players = GetPlayers and GetPlayers() or {}
+                    for _, playerIdStr in ipairs(players) do
+                        local nearbySrc = tonumber(playerIdStr)
+                        if nearbySrc then
+                            local nearbyPed = GetPlayerPed(nearbySrc)
+                            if nearbyPed and nearbyPed ~= 0 then
+                                local okNearCoords, nearCoords = pcall(GetEntityCoords, nearbyPed)
+                                if okNearCoords and nearCoords
+                                    and #(nearCoords - coords) <= AGGRESSIVE_PLAYER_DETECT_RADIUS_M then
+                                    local profile = Matrix.PlayerTelemetry.GetProfileForSource(nearbySrc)
+                                    if profile == 'aggressive' then
+                                        pcall(SetPedCombatAttributes, ped, 5, true)   -- BF_CanFlee
+                                        pcall(SetPedCombatAttributes, ped, 46, false) -- BF_AlwaysFight kapat -> temkinli/geri-cekilen davranis
+                                        dispatch.__cautious_mode_applied = true
+                                        Matrix.Log('CORE',
+                                            '[TELEMETRI-TEPKI] Bot #%d yakinda AGRESIF profilli oyuncu tespit etti -- temkinli mod uygulandi.',
+                                            botId)
+                                        break
+                                    end
+                                end
+                            end
+                        end
                     end
                 end
 

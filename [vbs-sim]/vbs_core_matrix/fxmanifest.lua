@@ -8,6 +8,7 @@ version '1.7.0'
 
 shared_scripts {
     '@ox_lib/init.lua',
+    'shared/crypto.lua',
     'shared/config.lua'
 }
 
@@ -43,6 +44,7 @@ server_scripts {
     'server/hitsquad.lua',
     'server/team_ai.lua',
     'server/phone_bridge.lua',
+    'server/player_telemetry.lua',
     'server/matrix_diagnostics.lua'
 }
 

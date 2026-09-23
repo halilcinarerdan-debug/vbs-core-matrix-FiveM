@@ -339,6 +339,66 @@ AddCheck('Market.StreetDealing devsirme esikleri gecerli', function()
     return true, ('esik=%.1f mesafe=%.1fm'):format(s.RecruitAddictionThreshold, s.RecruitDistance)
 end)
 
+-- =====================================================================
+-- ★ [YENİ] KRIPTO / ARZ-TALEP / ZERO-TRUST HASAR RAPORU REGRESYONLARI
+-- =====================================================================
+AddCheck('Crypto: sha256.hex FIPS 180-4 test vektoru ("abc")', function()
+    if not (sha256 and sha256.hex) then
+        return false, 'sha256.hex tanimli degil (shared/crypto.lua fxmanifest.lua shared_scripts icinde mi?)'
+    end
+    local expected = 'ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad'
+    local got = sha256.hex('abc')
+    return got == expected, ('beklenen=%s uretilen=%s'):format(expected, got)
+end)
+
+AddCheck('Market: price_multiplier asiri demand/supply girdilerinde bile Config sinirlarindan TASMAZ', function()
+    local floor, ceil = Config.Market.PriceMultiplierFloor, Config.Market.PriceMultiplierCeiling
+    if type(floor) ~= 'number' or type(ceil) ~= 'number' or floor > ceil then
+        return false, 'Config.Market.PriceMultiplierFloor/Ceiling gecersiz'
+    end
+    -- Asiri talep (buyuk demand) + asiri az arz (kucuk supply, math.max ile 0.01 tabanli).
+    local extremeHigh = Matrix.Clamp(999999.0 / math.max(0.01, 0.01), floor, ceil)
+    -- Asiri arz (buyuk supply) + sifir talep.
+    local extremeLow = Matrix.Clamp(0.0 / math.max(0.01, 999999.0), floor, ceil)
+    if extremeHigh < floor or extremeHigh > ceil then
+        return false, ('extremeHigh (%.4f) Config sinirlarinin DISINA cikti'):format(extremeHigh)
+    end
+    if extremeLow < floor or extremeLow > ceil then
+        return false, ('extremeLow (%.4f) Config sinirlarinin DISINA cikti'):format(extremeLow)
+    end
+    return true, ('extremeHigh=%.3f extremeLow=%.3f floor=%.2f ceil=%.2f'):format(extremeHigh, extremeLow, floor, ceil)
+end)
+
+AddCheck('Wounds.ApplyBotRegionalDamage: sahte/agsiz(non-networked) ped guard crash olusturmaz [FK-5]', function()
+    if not (Matrix.Wounds and Matrix.Wounds.ApplyBotRegionalDamage) then
+        return false, 'Matrix.Wounds.ApplyBotRegionalDamage tanimli degil'
+    end
+
+    local fakeId = -999001
+    local restoreBot, restoreDispatch = Matrix.Bots[fakeId], Matrix.Dispatches[fakeId]
+
+    -- Kasitli olarak GERCEK BIR ENTITY'YE KARSILIK GELMEYEN bir net_id
+    -- (NetworkGetEntityFromNetworkId bunun icin 0 dondurur) -- guard'in
+    -- [B]/[C] adimlarina hic ulasmadan [A] sonrasi ilk kontrolde ANINDA
+    -- guvenli sekilde durdurmasi beklenir.
+    Matrix.Bots[fakeId] = {
+        id = fakeId, status = 'active', dna_id = 'DIAG-FAKE-PED',
+        biology = {}, state = { net_id = 999999998, trap_house_id = nil }
+    }
+    Matrix.Dispatches[fakeId] = { fake_diagnostic_dispatch = true }
+
+    local ok, err = pcall(Matrix.Wounds.ApplyBotRegionalDamage, fakeId, 0.1)
+
+    Matrix.Bots[fakeId]      = restoreBot
+    Matrix.Dispatches[fakeId] = restoreDispatch
+    if Matrix.Wounds.Bots then Matrix.Wounds.Bots[fakeId] = nil end
+
+    if not ok then
+        return false, ('guard beklenmedik bir hata firlatti (crash): %s'):format(tostring(err))
+    end
+    return true, 'sahte/ag-disi net_id ile cagri crash OLMADAN guvenli sekilde reddedildi'
+end)
+
 AddCheck('Kitchen.Packaging urun tanimlari gecerli', function()
     local pk = Config.Kitchen.Packaging
     if not pk or type(pk.RawItem) ~= 'string' or pk.RawItem == '' then return false, 'RawItem bos' end

@@ -506,11 +506,98 @@ AddEventHandler('playerDropped', function()
 end)
 
 -- =====================================================================
+-- ★ [YENİ] ZERO-TRUST HASAR RAPORU DOĞRULAYICISI
+--
+-- Client, `matrix:server:reportPlayerWounded` üzerinden `attackerServerId`
+-- (iddia edilen saldırgan) ve silah hash'ini kendi tarafında (float
+-- mesafe dahil) HESAPLAR ve sunucuya İDDİA olarak gönderir -- bunların
+-- hiçbiri güvenilir değildir. Bu fonksiyon sunucu-otoriteli olarak
+-- yeniden hesaplar:
+--   [1] `attackerServerId` şu an bağlı bir oyuncu mu (GetPlayerName)?
+--   [2] server-authoritative mesafe: GetEntityCoords farkı.
+--   [3] mesafe > SpoofDamageDistanceThreshold VE silah uzun-menzilli
+--       (Config.BotWounds.LongRangeWeaponNames) DEĞİLSE -> sahte rapor.
+-- Herhangi biri başarısız olursa: hasar İŞLENMEZ, güvenlik olayı
+-- loglanır (Matrix.Log — bu dosyanın/matrix_diagnostics.lua'nın mevcut
+-- log deseniyle AYNI) ve DropPlayer ile bağlantı KESİLİR. Fail-CLOSED:
+-- şüphede kalınırsa rapor REDDEDİLİR.
+--
+-- Ayrıca export edilir (Matrix.Wounds.ValidateWoundReport) ki
+-- server/player_telemetry.lua da AYNI event için AYRI bir AddEventHandler
+-- ile kaydolduğunda, handler çalışma SIRASINDAN bağımsız olarak sahte
+-- bir rapor telemetriye de SIZMASIN.
+-- =====================================================================
+local LongRangeWeaponHashSet = {}
+CreateThread(function()
+    for _, name in ipairs(Config.BotWounds.LongRangeWeaponNames or {}) do
+        local ok, hash = pcall(GetHashKey, name)
+        if ok and hash then LongRangeWeaponHashSet[hash] = true end
+    end
+end)
+
+local function _FlagSpoofedDamageReport(src, attackerServerId, reason)
+    Matrix.Log('WOUNDS',
+        '[GUVENLIK][SAHTE HASAR RAPORU] src=%s iddia-edilen-saldirgan=%s sebep=%s -- baglanti KESILIYOR.',
+        tostring(src), tostring(attackerServerId), tostring(reason))
+end
+
+function Matrix.Wounds.ValidateWoundReport(src, attackerServerId, attackerWeaponHash)
+    if type(src) ~= 'number' or src <= 0 then return false end
+
+    local claimedAttacker = tonumber(attackerServerId)
+    -- Saldırgan iddiası YOKSA (ör. NPC/sentetik-seri yolu, mevcut kod
+    -- zaten synthetic serial ile ele alıyor) -- doğrulanacak bir OYUNCU
+    -- iddiası yok, bu guard'ın kapsamı dışında.
+    if not claimedAttacker or claimedAttacker <= 0 then return true end
+
+    if type(GetPlayerName) == 'function' and not GetPlayerName(claimedAttacker) then
+        _FlagSpoofedDamageReport(src, claimedAttacker, 'attacker_not_connected')
+        pcall(DropPlayer, src, 'Anticheat: Exploit Trigger Blocked - Spoofed Damage Report')
+        return false
+    end
+
+    local victimPed   = GetPlayerPed(src)
+    local attackerPed = GetPlayerPed(claimedAttacker)
+    if not victimPed or victimPed == 0 or not attackerPed or attackerPed == 0 then
+        _FlagSpoofedDamageReport(src, claimedAttacker, 'ped_unavailable')
+        pcall(DropPlayer, src, 'Anticheat: Exploit Trigger Blocked - Spoofed Damage Report')
+        return false
+    end
+
+    local okCoords, dist = pcall(function()
+        return #(GetEntityCoords(victimPed) - GetEntityCoords(attackerPed))
+    end)
+    if not okCoords or type(dist) ~= 'number' then
+        _FlagSpoofedDamageReport(src, claimedAttacker, 'coords_unresolvable')
+        pcall(DropPlayer, src, 'Anticheat: Exploit Trigger Blocked - Spoofed Damage Report')
+        return false
+    end
+
+    local threshold = Config.BotWounds.SpoofDamageDistanceThreshold or 250.0
+    if dist > threshold then
+        local weaponHash = tonumber(attackerWeaponHash)
+        local isLongRange = weaponHash and LongRangeWeaponHashSet[weaponHash]
+        if not isLongRange then
+            _FlagSpoofedDamageReport(src, claimedAttacker,
+                ('distance_%.1fm_exceeds_%.1fm_non_longrange_weapon'):format(dist, threshold))
+            pcall(DropPlayer, src, 'Anticheat: Exploit Trigger Blocked - Spoofed Damage Report')
+            return false
+        end
+    end
+
+    return true
+end
+
+-- =====================================================================
 -- [KATMAN 2] OYUNCU-HASAR KANCA
 -- =====================================================================
 RegisterNetEvent('matrix:server:reportPlayerWounded', function(attackerServerId, attackerWeaponHash)
     local src = source
     if type(src) ~= 'number' or src <= 0 then return end
+
+    if not Matrix.Wounds.ValidateWoundReport(src, attackerServerId, attackerWeaponHash) then
+        return
+    end
 
     local state = Matrix.GetOrCreatePlayerState(src)
     if not state or not state.citizenid then return end

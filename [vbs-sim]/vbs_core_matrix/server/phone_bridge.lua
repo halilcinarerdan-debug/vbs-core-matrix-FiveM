@@ -30,18 +30,13 @@ local TriggerEvent                            = TriggerEvent
 -- bureau.lua [KATMAN 8] _CryptoSha256Like ile AYNI aile; salt her zaman
 -- kod içinde bir literal sabittir.
 -- =====================================================================
+-- ★ [KRIPTO-1] Artik gercek SHA-256 (shared/crypto.lua) uzerinden delege
+-- edilir; bureau.lua [KATMAN 8] _CryptoSha256Like ile AYNI ailedeki
+-- (matematiksel checksum-zinciri) "benzeri" motor KALDIRILDI. Cagiran
+-- kod hala sonucu :sub(1, N) ile kisaltiyor -- 64 hex karakterlik gercek
+-- SHA-256 ciktisi bunun icin fazlasiyla yeterli, davranis DEGISMEDI.
 local function _Sha256Like(input)
-    input = tostring(input or '')
-    local out = {}
-    for i = 1, 16 do
-        local raw = ('%s#%d#DC'):format(input, i)
-        local sum = 0
-        for j = 1, #raw do
-            sum = (sum + (raw:byte(j) * (j + 131 + i))) % 0xFFFFFFF
-        end
-        out[i] = ('%04X'):format(sum % 0x10000)
-    end
-    return table.concat(out, '')
+    return sha256.hex(tostring(input or ''))
 end
 
 local function _MaskCoordinate(value, saltKey)

@@ -221,6 +221,12 @@ local pendingPurchaseTokens = {} -- [src] = { token=, kind=, catalog_id=, expire
 local TOKEN_TTL_MS = 15000
 
 
+-- ★ [KRIPTO-1] Token govdesi artik gercek SHA-256 (shared/crypto.lua)
+-- uzerinden uretilir. Onceki 8-turlu ChecksumOf zinciri KALDIRILDI; ayni
+-- seed (src+kind+catalogId+zaman+epoch-sayaci+endpoint+bekleyen-sayisi)
+-- literal tuz olarak korunur, yalnizca karma motoru degisti. Token hala
+-- tek kullanimlik/TTL'li bir NONCE'DUR (bkz. yukaridaki [SEC-4] notu) --
+-- bu disiplin degismedi.
 local function GenerateHandshakeToken(src, kind, catalogId)
     _TokenEpochCounter = (_TokenEpochCounter + 1) % 0x7FFFFFFF
 
@@ -236,12 +242,7 @@ local function GenerateHandshakeToken(src, kind, catalogId)
         os.time(), GetGameTimer(), _TokenEpochCounter,
         endpoint, pendingCount)
 
-    local parts = {}
-    for i = 1, 8 do
-        local roundRaw = ('%s#R%d'):format(seed, i)
-        parts[i] = ('%07X'):format(ChecksumOf(roundRaw, 47 + (i * 31)))
-    end
-    return 'TK-' .. table.concat(parts, '')
+    return 'TK-' .. sha256.hex(seed):upper()
 end
 
 
