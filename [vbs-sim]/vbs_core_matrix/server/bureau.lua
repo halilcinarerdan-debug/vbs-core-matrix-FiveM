@@ -1915,9 +1915,9 @@ exports('RunHourlyFinancialAudit', function() return Matrix.Bureau.RunHourlyFina
 
 -- =====================================================================
 -- ★★★ KATMAN 8 — CEPHE B: ANONİM KRİPTO CÜZDAN AĞLARI (SEC-6) ★★★
--- Rolling cipher mutasyon protokolü. FiveM server Lua ortamında saf
--- SHA-256 mevcut değildir; bu kod tabanının KENDİ ChecksumOf disipliniyle
--- tutarlı olarak 64-karakter deterministik hex üretimi yapılır.
+-- Rolling cipher mutasyon protokolü. shared/crypto.lua'nın saf Lua SHA-256
+-- uygulaması (sha256.hex) ile 64-karakterlik deterministik hex üretimi
+-- yapılır.
 -- SIFIR RNG: math.random YOKTUR.
 --
 -- ★★★ YAMA 2 (BU SÜRÜM) ★★★
@@ -1937,26 +1937,9 @@ exports('RunHourlyFinancialAudit', function() return Matrix.Bureau.RunHourlyFina
 Matrix.Bureau.CryptoWallets = Matrix.Bureau.CryptoWallets or {}
 Matrix.Bureau.__CryptoLocks = Matrix.Bureau.__CryptoLocks or {}
 
-local function _CryptoSha256Like(input)
-    input = tostring(input or '')
-    local out = {}
-    for i = 1, 16 do
-        local acc = 0
-        local raw = ('%s#%d'):format(input, i)
-        for round = 1, 512 do
-            for j = 1, #raw do
-                acc = (acc + (raw:byte(j) * (j + 97 + i + round))) % 0xFFFFFFF
-                acc = ((acc * 31) + round) % 0xFFFFFFF
-            end
-        end
-        out[i] = ('%04X'):format(acc % 0x10000)
-    end
-    return table.concat(out, '')
-end
-
 function Matrix.Bureau.GenerateWalletAddress(holderIdentifier, holderType)
     local seed = ('%s#%s#%s'):format(tostring(holderIdentifier), tostring(holderType), GetCurrentResourceName())
-    return '0x' .. _CryptoSha256Like(seed):sub(1, 62)
+    return '0x' .. sha256.hex(seed):sub(1, 62)
 end
 
 local function _LoadCryptoWallet(walletAddress)
@@ -1985,7 +1968,7 @@ function Matrix.Bureau.EnsureCryptoWallet(holderIdentifier, holderType)
     local existing = _LoadCryptoWallet(addr)
     if existing then return existing end
 
-    local initialKey = _CryptoSha256Like(('%s#%s#GENESIS'):format(addr, holderIdentifier))
+    local initialKey = sha256.hex(('%s#%s#GENESIS'):format(addr, holderIdentifier))
     local rec = {
         wallet_address     = addr,
         holder_identifier  = holderIdentifier,
@@ -2104,7 +2087,7 @@ function Matrix.Bureau.ProcessBribeCryptoTransaction(walletAddress, amount, targ
     -- ★ 4) Cipher mutasyonu (deterministik, RNG yok).
     local newSeq = oldSeq + 1
     local mutationInput = ('%s#%.4f#%s#%d'):format(oldKey, amount, holderIdentifier, newSeq)
-    local newKey     = _CryptoSha256Like(mutationInput)
+    local newKey     = sha256.hex(mutationInput)
     local newBalance = balance - amount
 
     -- ★ 5) CAS UPDATE — WHERE rolling_cipher_key = oldKey.
@@ -2292,7 +2275,8 @@ end)
 -- Additive. Mevcut hiçbir fonksiyon gövdesi DEĞİŞTİRİLMEDİ.
 -- =====================================================================
 
--- SHA256-benzeri checksum (mevcut _CryptoSha256Like ile AYNI aile).
+-- SHA256-benzeri checksum (shared/crypto.lua sha256.hex AILESINDEN AYRI,
+-- kasitli olarak daha ucuz bir dogrulama katmani -- bkz. asagidaki not).
 local function _OpsecChecksum(raw, salt)
     local sum = 0
     for i = 1, #raw do

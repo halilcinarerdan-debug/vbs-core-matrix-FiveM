@@ -8,7 +8,8 @@ version '1.7.0'
 
 shared_scripts {
     '@ox_lib/init.lua',
-    'shared/config.lua'
+    'shared/config.lua',
+    'shared/crypto.lua'
 }
 
 client_scripts {

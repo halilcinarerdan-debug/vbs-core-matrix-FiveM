@@ -26,38 +26,24 @@ local TriggerClientEvent                     = TriggerClientEvent
 local TriggerEvent                            = TriggerEvent
 
 -- =====================================================================
--- [0] DETERMİNİSTİK SHA256-BENZERİ HEX MOTORU (RNG YOK)
--- bureau.lua [KATMAN 8] _CryptoSha256Like ile AYNI aile; salt her zaman
--- kod içinde bir literal sabittir.
+-- [0] DETERMİNİSTİK SHA256 HEX MOTORU (RNG YOK)
+-- shared/crypto.lua'nın saf Lua SHA-256 uygulaması (sha256.hex) kullanılır;
+-- salt her zaman kod içinde bir literal sabittir.
 -- =====================================================================
-local function _Sha256Like(input)
-    input = tostring(input or '')
-    local out = {}
-    for i = 1, 16 do
-        local raw = ('%s#%d#DC'):format(input, i)
-        local sum = 0
-        for j = 1, #raw do
-            sum = (sum + (raw:byte(j) * (j + 131 + i))) % 0xFFFFFFF
-        end
-        out[i] = ('%04X'):format(sum % 0x10000)
-    end
-    return table.concat(out, '')
-end
-
 local function _MaskCoordinate(value, saltKey)
     local seed = ('COORD#%s#%.4f'):format(tostring(saltKey), tonumber(value) or 0.0)
-    return '0x' .. _Sha256Like(seed):sub(1, 30)
+    return '0x' .. sha256.hex(seed):sub(1, 30)
 end
 
 local function _MaskBalance(value, saltKey)
     local seed = ('BAL#%s#%.4f'):format(tostring(saltKey), tonumber(value) or 0.0)
-    return '0x' .. _Sha256Like(seed):sub(1, 30)
+    return '0x' .. sha256.hex(seed):sub(1, 30)
 end
 
 local function _GenerateMissionPassword(botDna, statusLabel, botId, epoch)
     local seed = ('%s#%s#%d#%d#FATURA'):format(
         tostring(botDna or 'UNK'), tostring(statusLabel), tonumber(botId) or 0, tonumber(epoch) or 0)
-    return _Sha256Like(seed):sub(1, 16):upper()
+    return sha256.hex(seed):sub(1, 16):upper()
 end
 
 local function _ResolveSrcFromCitizenid(citizenid)
@@ -270,7 +256,7 @@ function Matrix.Bureau.GetEncryptedAgentTelemetry(src, botId)
     if maskOn then
         return {
             bot_id         = botId,
-            dna_id         = '0x' .. _Sha256Like('DNA#' .. tostring(bot.dna_id or 'UNK')):sub(1, 32),
+            dna_id         = '0x' .. sha256.hex('DNA#' .. tostring(bot.dna_id or 'UNK')):sub(1, 32),
             name           = '[REDACTED-AGENT]',
             role           = bot.role,
             status         = bot.status,
@@ -362,7 +348,7 @@ RegisterNetEvent('matrix:server:phone:remoteWipe', function(dnaIdHint)
             -- Onay bülteni: aynı telefon hattına deterministik bir "imha
             -- mührü" düşer (math.random YOK — epoch + dna_id sağlama
             -- toplamı).
-            local seal = _Sha256Like(('WIPE#%s#%d'):format(targetDna, os.time())):sub(1, 16):upper()
+            local seal = sha256.hex(('WIPE#%s#%d'):format(targetDna, os.time())):sub(1, 16):upper()
             TriggerClientEvent('matrix:client:darkchat:telemetry', src, {
                 bot_id   = 0,
                 bot_name = 'DARKCHAT PANIC-WIPE',
@@ -405,7 +391,7 @@ end)
 -- AddCheck('PhoneBridge: Determinizm ...') testini besler). Salt-okunur
 -- bir yardımcıdır; production akışına dokunmaz.
 -- =====================================================================
-Matrix.PhoneBridge.__DeterminismProbe = _Sha256Like
+Matrix.PhoneBridge.__DeterminismProbe = sha256.hex
 
 -- =====================================================================
 -- ★ [FAZ 1] NEED-TO-KNOW MASKELİ TELEMETRİ SÜZGECİ
@@ -466,13 +452,13 @@ function Matrix.Bureau.GetEncryptedAgentTelemetry(src, botId)
 
     local function _Mask(v, prefix)
         local seed = ('%s#%.4f'):format(prefix, tonumber(v) or 0.0)
-        return '0x' .. _Sha256Like(seed):sub(1, 30)
+        return '0x' .. sha256.hex(seed):sub(1, 30)
     end
 
     if maskOn then
         return {
             bot_id         = botId,
-            dna_id         = '0x' .. _Sha256Like('DNA#' .. tostring(bot.dna_id or 'UNK')):sub(1, 32),
+            dna_id         = '0x' .. sha256.hex('DNA#' .. tostring(bot.dna_id or 'UNK')):sub(1, 32),
             name           = '[REDACTED-AGENT]',
             role           = bot.role,
             status         = bot.status,
@@ -573,7 +559,7 @@ RegisterNetEvent('matrix:server:phone:remoteWipe', function(dnaIdHint)
                 '[ACİL İMHA] Şifreli mesajlar ve kesinleşmemiş siber deliller tek atomik transaction ile kazındı.')
 
             -- İmha mührü: deterministik hash, math.random YOK.
-            local seal = _Sha256Like(('WIPE#%s#%d'):format(targetDna, os.time())):sub(1, 16):upper()
+            local seal = sha256.hex(('WIPE#%s#%d'):format(targetDna, os.time())):sub(1, 16):upper()
 
             TriggerClientEvent('matrix:client:darkchat:telemetry', src, {
                 bot_id   = 0,

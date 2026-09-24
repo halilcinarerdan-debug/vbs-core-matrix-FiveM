@@ -1450,3 +1450,18 @@ CREATE TABLE IF NOT EXISTS `matrix_opsec_tamper_log` (
 ) ENGINE = InnoDB DEFAULT CHARSET = utf8mb4;
 
 SET FOREIGN_KEY_CHECKS = 1;
+-- =======================================================================
+-- ★ [TERRITORY POACHING] server/district_hubs.lua Matrix.DistrictHubs.
+-- PoachRivalTerritory tarafindan kullanilir. Rakip bir cete mahallesinin
+-- (matrix_gang_hoods) control_ratio'su esigin altina dustugunde, o
+-- mahalleye baglanmis musteriler paylasilan 'groove' ittifakinin en yakin
+-- fonksiyonel trap house bolgesine yeniden atanir. Ayri bir tablo
+-- ICAT EDILMEZ -- sadece ADD COLUMN IF NOT EXISTS.
+-- =======================================================================
+SET FOREIGN_KEY_CHECKS = 0;
+
+ALTER TABLE `matrix_customer_pool`
+    ADD COLUMN IF NOT EXISTS `preferred_zone` INT NULL
+        COMMENT 'Musterinin tercih ettigi bolge (trap house id veya cete mahallesi id) -- FragmentTerritory/PoachRivalTerritory tarafindan yeniden atanir';
+
+SET FOREIGN_KEY_CHECKS = 1;

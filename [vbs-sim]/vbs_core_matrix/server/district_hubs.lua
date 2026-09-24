@@ -229,6 +229,99 @@ end)
 local SplinterCells = {} -- [id] = { id, parent_hub_id, trap_house_id, splinter_index, coords, active }
 local nextSplinterId = 1
 
+-- =====================================================================
+-- ★ [TERRITORY POACHING] RAKIP MAHALLE KONTROL ERİMESİ + MÜŞTERİ AVCILIĞI
+-- FragmentTerritory tetiklendiğinde (rakip trap house'un cete lideri
+-- düştüğünde) o trap house'u 'nearest_trap_house_id' olarak işaretlemiş
+-- TÜM rakip cete mahallelerinin (server/gang_hoods.lua Matrix.GangHoods.
+-- Hoods, MEVCUT matrix_gang_hoods.control_ratio) kontrolü 0-RNG sabit bir
+-- adımla (Config.GangHoods.ControlErosionPerFragmentation) aşınır.
+--
+-- control_ratio, Config.GangHoods.ControlRatioPoachThreshold (0.30)
+-- eşiğinin ALTINA İLK KEZ düştüğünde, o mahalleye bağlı müşteri havuzu
+-- (matrix_customer_pool.preferred_zone) paylaşılan 'groove' ittifakının en
+-- yakın FONKSİYONEL (server/bureau.lua Matrix.Bureau.IsLockedDown İLE AYNI
+-- kilit kontrolü altında OLMAYAN) trap house bölgesine yönlendirilir ve
+-- devraldığı gelir, MEVCUT Matrix.CashDecay.Deposit (server/market.lua)
+-- kirli-nakit hattı üzerinden paylaşılan groove kasasına (matrix_cash_decay)
+-- akar. Yeni bir ekonomi formülü İCAT EDİLMEZ.
+-- =====================================================================
+local function FindNearestFunctioningTrapHouse(coords)
+    local nearestId, nearestDist = nil, math.huge
+    for id, house in pairs(Matrix.TrapHouses or {}) do
+        local locked = Matrix.Bureau and Matrix.Bureau.IsLockedDown and Matrix.Bureau.IsLockedDown(id)
+        if not locked and house and house.coords then
+            local hc = house.coords
+            local dx, dy, dz = hc.x - coords.x, hc.y - coords.y, (hc.z or 0.0) - (coords.z or 0.0)
+            local d = math.sqrt(dx * dx + dy * dy + dz * dz)
+            if d < nearestDist then nearestId, nearestDist = id, d end
+        end
+    end
+    return nearestId
+end
+
+local function PoachRivalTerritory(hoodId, hood)
+    local trapId = FindNearestFunctioningTrapHouse(hood.coords)
+    if not trapId then
+        Matrix.Log('DISTRICT_HUB',
+            '[POACH][FACTION:groove] Mahalle #%d icin fonksiyonel trap house bulunamadi -- avcilik iptal.', hoodId)
+        return
+    end
+
+    local updOk, affected = pcall(function()
+        return MySQL.update.await(
+            'UPDATE matrix_customer_pool SET preferred_zone = ? WHERE preferred_zone = ?',
+            { trapId, hoodId })
+    end)
+    affected = (updOk and tonumber(affected)) or 0
+
+    if affected > 0 then
+        local proceeds = affected * (Config.GangHoods.PoachedCustomerIncomeValue or 0.0)
+        if proceeds > 0.0 then
+            Matrix.CashDecay.Deposit(trapId, proceeds)
+        end
+        Matrix.Log('DISTRICT_HUB',
+            '[POACH][FACTION:groove] Mahalle #%d kontrolu esigin (%.2f) altina dustu -- %d musteri trap #%d bolgesine yonlendirildi, %.1f gelir paylasilan groove kasasina (matrix_cash_decay) aktarildi.',
+            hoodId, Config.GangHoods.ControlRatioPoachThreshold or 0.30, affected, trapId, proceeds)
+    else
+        Matrix.Log('DISTRICT_HUB',
+            '[POACH][FACTION:groove] Mahalle #%d kontrolu esigin (%.2f) altina dustu -- avciliga uygun musteri kaydi yok, trap #%d hazir bekliyor.',
+            hoodId, Config.GangHoods.ControlRatioPoachThreshold or 0.30, trapId)
+    end
+end
+
+--- Rakip trap house'un cete lideri düştüğünde, o trap house'a bağlı TÜM
+--- rakip mahallelerin control_ratio'sunu 0-RNG sabit bir adımla aşındırır;
+--- eşiğin altına ilk kez düşenler için PoachRivalTerritory'yi tetikler.
+function Matrix.DistrictHubs.ErodeRivalControl(trapHouseId)
+    trapHouseId = tonumber(trapHouseId)
+    if not trapHouseId then return end
+    if not (Matrix.GangHoods and Matrix.GangHoods.Hoods) then return end
+
+    local threshold = Config.GangHoods.ControlRatioPoachThreshold or 0.30
+    local step       = Config.GangHoods.ControlErosionPerFragmentation or 0.20
+
+    for hoodId, hood in pairs(Matrix.GangHoods.Hoods) do
+        if hood.nearest_trap_house_id == trapHouseId then
+            local before = tonumber(hood.control_ratio) or 1.0
+            local after  = Matrix.Clamp(before - step, 0.0, 1.0)
+            hood.control_ratio = after
+
+            pcall(function()
+                MySQL.update.await('UPDATE matrix_gang_hoods SET control_ratio = ? WHERE id = ?', { after, hoodId })
+            end)
+
+            Matrix.Log('DISTRICT_HUB',
+                '[KONTROL ERIMESI] Mahalle #%d control_ratio %.2f -> %.2f (trap #%d rakip cete lideri dustu).',
+                hoodId, before, after, trapHouseId)
+
+            if before >= threshold and after < threshold then
+                pcall(PoachRivalTerritory, hoodId, hood)
+            end
+        end
+    end
+end
+
 local function PersistSplinterCell(cell)
     MySQL.insert([[
         INSERT INTO matrix_splinter_cells
@@ -276,6 +369,11 @@ function Matrix.DistrictHubs.FragmentTerritory(trapHouseId, deadLeaderBotId)
         '[FRAGMENTATION] Cete lideri Bot #%s dustu (Trap #%d) -- %d hub parcalandi, %dx Alt Hucre (Splinter Cell) uretildi (0-RNG: %s).',
         tostring(deadLeaderBotId), trapHouseId, fragmentedHubs, fragmentedHubs * splinterCount,
         (trapHouseId % 2 == 0) and 'cift->2' or 'tek->3')
+
+    -- ★ [TERRITORY POACHING] Cete lideri dustugunde, bu trap house'a bagli
+    -- rakip mahallelerin control_ratio'su asinir; esigin altina dusenler
+    -- icin musteri avciligi (bkz. yukaridaki ErodeRivalControl) tetiklenir.
+    pcall(Matrix.DistrictHubs.ErodeRivalControl, trapHouseId)
 
     -- ★ [KATMAN 7 REGRESYON] Her bolunme matrix_gang_learning_core'a bir
     -- ogrenme kaydi isler -- FragmentTerritory'nin ne kadar sik/agresif

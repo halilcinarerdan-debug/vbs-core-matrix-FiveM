@@ -388,6 +388,9 @@ function Matrix.GetOrCreatePlayerState(src)
         id         = citizenid,
         citizenid  = citizenid,
         dna_id     = ('DNA-PLR-%s'):format(citizenid),
+        -- Tum oyuncular ZATEN tek bir paylasilan faksiyon/ittifak olarak
+        -- ('groove') oynar -- bkz. Config.Factions.PlayerFaction.
+        faction    = (Config.Factions and Config.Factions.PlayerFaction) or 'groove',
         psychology = { skill_chemistry = Config.Player.DefaultSkillChemistry },
         biology    = {
             fatigue_level             = 0.0,

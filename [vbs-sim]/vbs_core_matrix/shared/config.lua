@@ -1330,7 +1330,33 @@ Config.GangHoods = {
     -- KOSULMADAN yakalanirsa (Frisk, MEVCUT Config.Forensics.Frisk)
     -- tasiyicinin AKTIF davasina (MEVCUT /davaac -> matrix_trial_records)
     -- %100 Mahkumiyet Skoru olarak islenir.
-    FrameUpMetadataTag           = '[ORIGIN: BLOODY LOOT]'
+    FrameUpMetadataTag           = '[ORIGIN: BLOODY LOOT]',
+
+    -- [TERRITORY POACHING] server/district_hubs.lua Matrix.DistrictHubs.
+    -- ErodeRivalControl / PoachRivalTerritory tarafindan kullanilir.
+    -- Rakip mahallenin control_ratio'su bu esigin ALTINA dustugunde
+    -- musteri havuzu (matrix_customer_pool) paylasilan 'groove' ittifakinin
+    -- en yakin fonksiyonel trap house'una yonlendirilir.
+    ControlRatioPoachThreshold      = 0.30,
+    -- Her FragmentTerritory tetiklenmesinde (rakip trap house'un cete
+    -- lideri dustugunde) o trap house'a bagli mahallelerin control_ratio'su
+    -- 0-RNG sabit bir adimla asinir.
+    ControlErosionPerFragmentation  = 0.20,
+    -- Avlanan (preferred_zone yeniden atanan) musteri basina, paylasilan
+    -- groove kasasina (matrix_cash_decay) akan sabit gelir -- MEVCUT
+    -- Config.Market.StreetBasePricePerGram/SaleBatchGrams deseniyle AYNI
+    -- ruhta, yeni bir ekonomi formulu ICAT EDILMEZ.
+    PoachedCustomerIncomeValue      = 75.0
+}
+
+-- =====================================================================
+-- ★ PAYLASILAN ITTIFAK / FAKSIYON (SHARED ALLIANCE)
+-- Tum oyuncular ZATEN tek bir paylasilan faksiyon/ittifak olarak
+-- ('groove') oynar -- rakip AI cete mahalleleri (Config.GangHoods) HARIC
+-- oyuncular arasi rakip bir faksiyon sistemi YOKTUR/EKLENMEZ.
+-- =====================================================================
+Config.Factions = {
+    PlayerFaction = 'groove'
 }
 
 -- =====================================================================
